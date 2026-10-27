@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bone Fracture Detection</title>
+<style>
+  :root {
+    --bg:#f5f7fa; --card:#fff; --ink:#14202e; --muted:#5d6b7a; --line:#dde3ea;
+    --accent:#0b6bcb; --accent-ink:#fff; --warn-bg:#fff6e5; --warn-ink:#7a4b00; --err:#b3261e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0e141b; --card:#161e28; --ink:#e7edf3; --muted:#93a1b0; --line:#273341;
+            --accent:#4a9df0; --accent-ink:#06121f; --warn-bg:#2a2112; --warn-ink:#f0c674; --err:#f2796f; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+         font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  .wrap { max-width:1000px; margin:0 auto; padding:24px 16px 48px; }
+  h1 { font-size:1.6rem; margin:0 0 4px; }
+  .sub { color:var(--muted); margin:0 0 16px; }
+  .notice { background:var(--warn-bg); color:var(--warn-ink); border-radius:10px;
+            padding:10px 14px; font-size:.9rem; margin-bottom:20px; }
+  .grid { display:grid; grid-template-columns:1.6fr 1fr; gap:20px; align-items:start; }
+  @media (max-width:760px){ .grid { grid-template-columns:1fr; } }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px; }
+  .drop { border:2px dashed var(--line); border-radius:12px; min-height:280px; display:grid;
+          place-items:center; text-align:center; color:var(--muted); cursor:pointer; padding:16px; }
+  .drop.over { border-color:var(--accent); color:var(--accent); }
+  .stage { position:relative; display:none; }
+  .stage canvas { width:100%; height:auto; display:block; border-radius:10px; background:#000; }
+  button { font:inherit; cursor:pointer; border-radius:10px; border:1px solid var(--line);
+           background:var(--card); color:var(--ink); padding:9px 16px; }
+  button.primary { background:var(--accent); color:var(--accent-ink); border-color:var(--accent); font-weight:600; }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  .row { display:flex; gap:10px; flex-wrap:wrap; margin-top:14px; align-items:center; }
+  label { font-size:.9rem; color:var(--muted); display:block; margin-bottom:4px; }
+  input[type=range] { width:100%; }
+  input[type=text] { width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--line);
+                     background:var(--bg); color:var(--ink); font:inherit; }
+  h2 { font-size:1.05rem; margin:0 0 10px; }
+  ul.dets { list-style:none; padding:0; margin:0; }
+  ul.dets li { display:flex; align-items:center; gap:10px; padding:8px 0; border-bottom:1px solid var(--line); }
+  ul.dets li:last-child { border-bottom:0; }
+  .dot { width:12px; height:12px; border-radius:50%; flex:none; }
+  .name { flex:1; text-transform:capitalize; }
+  .pct { font-variant-numeric:tabular-nums; color:var(--muted); }
+  .status { min-height:1.5em; margin:10px 0 0; font-size:.95rem; }
+  .status.err { color:var(--err); }
+  details { margin-top:16px; }
+  summary { cursor:pointer; color:var(--muted); }
+  .muted { color:var(--muted); font-size:.9rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Bone Fracture Detection</h1>
+  <p class="sub">Upload an X-ray and a YOLOv5 model marks what it finds. It runs entirely in your browser: the image never leaves your device.</p>
+  <div class="notice">Educational project, not a medical device. Results must not be used for diagnosis or treatment decisions.</div>
+
+  <div class="grid">
+    <div class="card">
+      <div id="drop" class="drop" tabindex="0" role="button" aria-label="Choose or drop an X-ray image">
+        <div><strong>Drop an X-ray image here</strong><br>or click to choose a file (JPG / PNG)</div>
+      </div>
+      <div id="stage" class="stage"><canvas id="canvas"></canvas></div>
+      <input id="file" type="file" accept="image/*" hidden>
+      <div class="row">
+        <button id="detect" class="primary" disabled>Detect</button>
+        <button id="reset" disabled>Clear</button>
+      </div>
+      <p id="status" class="status" aria-live="polite"></p>
+    </div>
+
+    <div>
+      <div class="card">
+        <h2>Results</h2>
+        <div style="margin-bottom:12px">
+          <label for="conf">Minimum confidence: <span id="confVal">25%</span></label>
+          <input id="conf" type="range" min="5" max="95" value="25">
+        </div>
+        <div id="summary" class="muted">Nothing analysed yet.</div>
+        <ul id="dets" class="dets"></ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  // Pinned ONNX runtime (WASM). To self-host, download these files into web/lib/ and change both lines.
+  window.ORT_BASE = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.17.3/dist/";
+</script>
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.17.3/dist/ort.min.js"></script>
+<script src="detector.js"></script>
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const COLORS = { fracture:"#e5484d", angle:"#f5a524", line:"#17c964", messed_up_angle:"#a855f7" };
+  const FALLBACK = ["#06b6d4", "#ec4899", "#eab308", "#84cc16"];
+  const state = { file:null, img:null, result:null };
+
+  // ---- model loading ----
+  let modelReady = false;
+  function refreshButtons(){ $("detect").disabled = !(modelReady && state.file); }
+  (async () => {
+    setStatus("Loading model…");
+    try {
+      await Detector.load(p => setStatus("Loading model… " + Math.round(p * 100) + "%"));
+      modelReady = true; setStatus(state.file ? "Model ready." : "Model ready. Choose an X-ray to begin."); refreshButtons();
+    } catch (e) { setStatus("Could not load the model: " + e.message, true); }
+  })();
+
+  // ---- file selection ----
+  const drop = $("drop"), input = $("file");
+  drop.onclick = () => input.click();
+  drop.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") input.click(); };
+  input.onchange = () => input.files[0] && load(input.files[0]);
+  ["dragenter","dragover"].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.add("over"); }));
+  ["dragleave","drop"].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.remove("over"); }));
+  drop.addEventListener("drop", e => e.dataTransfer.files[0] && load(e.dataTransfer.files[0]));
+
+  function setStatus(msg, err){ $("status").textContent = msg || ""; $("status").className = "status" + (err ? " err" : ""); }
+
+  function load(file) {
+    if (!file.type.startsWith("image/")) return setStatus("Please choose an image file.", true);
+    const img = new Image();
+    img.onload = () => {
+      state.file = file; state.img = img; state.result = null;
+      drop.style.display = "none"; $("stage").style.display = "block";
+      $("reset").disabled = false; refreshButtons();
+      if (modelReady) setStatus(""); render();
+    };
+    img.onerror = () => setStatus("That file could not be read as an image.", true);
+    img.src = URL.createObjectURL(file);
+  }
+
+  $("reset").onclick = () => {
+    state.file = state.img = state.result = null; input.value = "";
+    drop.style.display = ""; $("stage").style.display = "none";
+    $("detect").disabled = $("reset").disabled = true; setStatus(modelReady ? "Model ready. Choose an X-ray to begin." : ""); renderList();
+  };
+
+  // ---- detect ----
+  $("detect").onclick = async () => {
+    if (!state.img || !modelReady) return;
+    $("detect").disabled = true; setStatus("Analysing…");
+    await new Promise(r => setTimeout(r, 30)); // let the status text paint
+    try {
+      const t0 = performance.now();
+      const detections = await Detector.detect(state.img, 0.05); // slider filters afterwards
+      state.result = { detections, inference_ms: Math.round(performance.now() - t0) };
+      window.__lastDetections = detections; // handy for debugging
+      setStatus("Done in " + state.result.inference_ms + " ms.");
+      render(); renderList();
+    } catch (e) { setStatus("Detection failed: " + e.message, true); }
+    finally { refreshButtons(); }
+  };
+
+  $("conf").oninput = () => { $("confVal").textContent = $("conf").value + "%"; render(); renderList(); };
+
+  // ---- drawing ----
+  const colorFor = (d) => COLORS[d.label] || FALLBACK[d.class_id % FALLBACK.length];
+  const visible = () => state.result ? state.result.detections.filter(d => d.confidence * 100 >= +$("conf").value) : [];
+
+  function render() {
+    if (!state.img) return;
+    const c = $("canvas"), ctx = c.getContext("2d");
+    c.width = state.img.naturalWidth; c.height = state.img.naturalHeight;
+    ctx.drawImage(state.img, 0, 0);
+    const lw = Math.max(2, Math.round(c.width / 250)), fs = Math.max(12, Math.round(c.width / 42));
+    ctx.lineWidth = lw; ctx.font = `600 ${fs}px system-ui, sans-serif`; ctx.textBaseline = "top";
+    for (const d of visible()) {
+      const [x1,y1,x2,y2] = d.box, col = colorFor(d);
+      ctx.strokeStyle = col; ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+      const t = `${d.label.replace(/_/g," ")} ${Math.round(d.confidence*100)}%`;
+      const w = ctx.measureText(t).width + 10, h = fs + 6, ty = y1 - h >= 0 ? y1 - h : y1;
+      ctx.fillStyle = col; ctx.fillRect(x1, ty, w, h);
+      ctx.fillStyle = "#fff"; ctx.fillText(t, x1 + 5, ty + 3);
+    }
+  }
+
+  function renderList() {
+    const ul = $("dets"); ul.innerHTML = "";
+    if (!state.result) { $("summary").textContent = "Nothing analysed yet."; return; }
+    const dets = visible();
+    $("summary").textContent = dets.length
+      ? dets.length + " detection" + (dets.length > 1 ? "s" : "") + " at or above " + $("conf").value + "% confidence."
+      : "No detections at this confidence. Try lowering the slider.";
+    for (const d of dets) {
+      const li = document.createElement("li");
+      const dot = document.createElement("span"); dot.className = "dot"; dot.style.background = colorFor(d);
+      const nm = document.createElement("span"); nm.className = "name"; nm.textContent = d.label.replace(/_/g, " ");
+      const pc = document.createElement("span"); pc.className = "pct"; pc.textContent = (d.confidence * 100).toFixed(1) + "%";
+      li.append(dot, nm, pc); ul.append(li);
+    }
+  }
+})();
+</script>
+</body>
+</html>
