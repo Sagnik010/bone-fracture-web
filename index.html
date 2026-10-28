@@ -81,6 +81,7 @@
         </div>
         <div id="summary" class="muted">Nothing analysed yet.</div>
         <ul id="dets" class="dets"></ul>
+        <p id="modelInfo" class="muted" style="margin:12px 0 0"></p>
       </div>
     </div>
   </div>
@@ -106,6 +107,8 @@
     setStatus("Loading model…");
     try {
       await Detector.load(p => setStatus("Loading model… " + Math.round(p * 100) + "%"));
+      const m = Detector.meta || {};
+      if (m.info) $("modelInfo").textContent = (m.title ? m.title + (m.version ? " (" + m.version + ")" : "") + ": " : "") + m.info;
       modelReady = true; setStatus(state.file ? "Model ready." : "Model ready. Choose an X-ray to begin."); refreshButtons();
     } catch (e) { setStatus("Could not load the model: " + e.message, true); }
   })();
@@ -185,7 +188,7 @@
     const dets = visible();
     $("summary").textContent = dets.length
       ? dets.length + " detection" + (dets.length > 1 ? "s" : "") + " at or above " + $("conf").value + "% confidence."
-      : "No detections at this confidence. Try lowering the slider.";
+      : "No detections at this confidence. Try lowering the slider. This does not mean there is no fracture.";
     for (const d of dets) {
       const li = document.createElement("li");
       const dot = document.createElement("span"); dot.className = "dot"; dot.style.background = colorFor(d);

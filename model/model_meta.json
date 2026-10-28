@@ -1,12 +1,9 @@
 {
-  "imgsz": 416,
+  "imgsz": 640,
   "names": [
-    "angle",
-    "fracture",
-    "line",
-    "messed_up_angle"
+    "fracture"
   ],
-  "nc": 4,
+  "nc": 1,
   "strides": [
     8,
     16,
@@ -60,5 +57,8 @@
     "p3",
     "p4",
     "p5"
-  ]
+  ],
+  "title": "Fracture detector v2",
+  "info": "YOLOv5s trained on children's wrist X-rays (GRAZPEDWRI-DX) and the original project data. One class: fracture.",
+  "version": "2026-10-28"
 }
